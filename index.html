@@ -1,0 +1,953 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Comic Vertical Reader</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f0f0f;
+      --surface: #1a1a1a;
+      --surface2: #252525;
+      --text: #e8e8e8;
+      --muted: #888;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --danger: #ef4444;
+      --success: #22c55e;
+      --radius: 12px;
+      --panel-width: 380px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      line-height: 1.5;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ========== HEADER ========== */
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(15, 15, 15, 0.92);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid #2a2a2a;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .logo {
+      font-weight: 700;
+      font-size: 1.05rem;
+      letter-spacing: -0.02em;
+      white-space: nowrap;
+    }
+    .logo span { color: var(--accent); }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 1;
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+
+    input[type="text"] {
+      flex: 1;
+      min-width: 160px;
+      background: var(--surface);
+      border: 1px solid #333;
+      color: var(--text);
+      padding: 9px 14px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input[type="text"]:focus { border-color: var(--accent); }
+    input[type="text"]::placeholder { color: var(--muted); }
+
+    button, .btn {
+      background: var(--accent);
+      color: white;
+      border: none;
+      padding: 9px 14px;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+      white-space: nowrap;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    button:hover { background: var(--accent-hover); }
+    button:active { transform: scale(0.97); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    button.secondary {
+      background: var(--surface2);
+      color: var(--text);
+    }
+    button.secondary:hover { background: #333; }
+
+    button.ghost {
+      background: transparent;
+      color: var(--muted);
+      padding: 8px 10px;
+    }
+    button.ghost:hover {
+      color: var(--text);
+      background: var(--surface2);
+    }
+
+    button.active-toggle {
+      background: #1d4ed8;
+      box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.4);
+    }
+
+    .file-label {
+      background: var(--surface2);
+      color: var(--text);
+      border: 1px dashed #444;
+      padding: 9px 14px;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+      white-space: nowrap;
+    }
+    .file-label:hover {
+      border-color: var(--accent);
+      background: #2a2a2a;
+    }
+
+    #fileInput, #txtFileInput { display: none; }
+
+    .status {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-left: auto;
+    }
+    .status.loading { color: var(--accent); }
+    .status.error { color: var(--danger); }
+    .status.success { color: var(--success); }
+
+    /* ========== LAYOUT ========== */
+    #workspace {
+      flex: 1;
+      display: flex;
+      min-height: 0;
+      position: relative;
+    }
+
+    #comicPane {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+
+    /* Text panel (split) */
+    #textPane {
+      display: none;
+      width: var(--panel-width);
+      min-width: 280px;
+      max-width: 50vw;
+      background: var(--surface);
+      border-left: 1px solid #2a2a2a;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    body.split-mode #textPane {
+      display: flex;
+    }
+
+    #textPaneHeader {
+      padding: 12px 14px;
+      border-bottom: 1px solid #2a2a2a;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      background: #141414;
+    }
+
+    #textPaneHeader .row {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+
+    #textPaneHeader input[type="text"] {
+      flex: 1;
+      min-width: 0;
+      font-size: 0.85rem;
+      padding: 8px 10px;
+    }
+
+    #textPaneHeader button,
+    #textPaneHeader .file-label {
+      padding: 8px 10px;
+      font-size: 0.8rem;
+    }
+
+    #textContent {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px 18px 40px;
+      font-size: 0.95rem;
+      line-height: 1.7;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: #d4d4d4;
+    }
+
+    #textContent:empty::before {
+      content: "Teks terjemahan / catatan akan muncul di sini.\n\nTempel link Google Docs atau upload file .txt.";
+      color: var(--muted);
+      white-space: pre-wrap;
+    }
+
+    #textContent h1, #textContent h2, #textContent h3 {
+      color: var(--text);
+      margin: 1.2em 0 0.5em;
+    }
+
+    /* Landing */
+    #landing {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 20px;
+      text-align: center;
+      gap: 24px;
+    }
+
+    #landing h1 {
+      font-size: 1.8rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+
+    #landing p {
+      color: var(--muted);
+      max-width: 440px;
+      font-size: 0.95rem;
+    }
+
+    .drop-zone {
+      width: min(480px, 100%);
+      border: 2px dashed #333;
+      border-radius: var(--radius);
+      padding: 48px 24px;
+      background: var(--surface);
+      transition: border-color 0.2s, background 0.2s;
+      cursor: pointer;
+    }
+    .drop-zone.dragover {
+      border-color: var(--accent);
+      background: #1a2332;
+    }
+    .drop-zone .icon { font-size: 2.5rem; margin-bottom: 12px; }
+
+    .tips {
+      max-width: 480px;
+      text-align: left;
+      background: var(--surface);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+    .tips strong { color: var(--text); }
+    .tips ul { margin: 8px 0 0 18px; }
+    .tips li { margin-bottom: 4px; }
+
+    /* Reader */
+    #reader {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      width: 100%;
+      padding-bottom: 80px;
+    }
+    #reader.active { display: flex; }
+
+    .page {
+      width: 100%;
+      max-width: 900px;
+      display: block;
+      margin: 0 auto;
+      background: #111;
+    }
+    .page img {
+      width: 100%;
+      height: auto;
+      display: block;
+      vertical-align: top;
+    }
+
+    .page-info {
+      position: fixed;
+      bottom: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.75);
+      backdrop-filter: blur(8px);
+      color: #fff;
+      font-size: 0.8rem;
+      padding: 6px 14px;
+      border-radius: 20px;
+      z-index: 50;
+      pointer-events: none;
+      opacity: 0.85;
+    }
+
+    body.split-mode .page-info {
+      left: calc(50% - var(--panel-width) / 2);
+    }
+
+    #progressBar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      height: 3px;
+      background: var(--accent);
+      width: 0%;
+      z-index: 200;
+      transition: width 0.1s linear;
+    }
+
+    #loadingOverlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.7);
+      z-index: 150;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 16px;
+    }
+    #loadingOverlay.show { display: flex; }
+
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid #333;
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #floatBar {
+      display: none;
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      gap: 8px;
+      z-index: 60;
+    }
+    body.split-mode #floatBar {
+      right: calc(var(--panel-width) + 20px);
+    }
+    #floatBar.show { display: flex; }
+
+    #floatBar button {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      padding: 0;
+      justify-content: center;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    }
+
+    /* Resize handle */
+    #resizeHandle {
+      display: none;
+      width: 5px;
+      cursor: col-resize;
+      background: #2a2a2a;
+      transition: background 0.15s;
+      flex-shrink: 0;
+    }
+    body.split-mode #resizeHandle { display: block; }
+    #resizeHandle:hover, #resizeHandle.active {
+      background: var(--accent);
+    }
+
+    /* Mobile: stack panels */
+    @media (max-width: 768px) {
+      body.split-mode #workspace {
+        flex-direction: column;
+      }
+      body.split-mode #textPane {
+        width: 100% !important;
+        max-width: 100%;
+        min-width: 0;
+        height: 40vh;
+        border-left: none;
+        border-top: 1px solid #2a2a2a;
+        order: 2;
+      }
+      body.split-mode #comicPane {
+        height: 60vh;
+        order: 1;
+      }
+      #resizeHandle { display: none !important; }
+      body.split-mode .page-info {
+        left: 50%;
+      }
+      body.split-mode #floatBar {
+        right: 20px;
+        bottom: calc(40vh + 16px);
+      }
+      header { padding: 8px 12px; }
+      .logo { font-size: 0.95rem; }
+      input[type="text"] { min-width: 100%; order: 10; }
+      .status { width: 100%; margin-left: 0; order: 11; }
+    }
+  </style>
+</head>
+<body>
+  <div id="progressBar"></div>
+
+  <header>
+    <div class="logo">Comic<span>Reader</span></div>
+    <div class="controls">
+      <input type="text" id="urlInput" placeholder="Link Google Drive / URL ZIP..." />
+      <button id="loadUrlBtn">Muat ZIP</button>
+      <label class="file-label" for="fileInput">📁 ZIP</label>
+      <input type="file" id="fileInput" accept=".zip,.cbz,application/zip,application/x-zip-compressed" />
+      <button id="splitBtn" class="secondary" title="Tampilkan panel teks (Google Docs / TXT)">📝 Teks</button>
+      <button id="clearBtn" class="secondary" style="display:none">Tutup</button>
+    </div>
+    <div class="status" id="status"></div>
+  </header>
+
+  <div id="workspace">
+    <div id="comicPane">
+      <div id="landing">
+        <div>
+          <h1>Baca Komik Vertikal</h1>
+          <p>Tampilkan gambar dari file ZIP secara berurutan. Support hampir semua format gambar termasuk AVIF. Bisa split dengan teks terjemahan.</p>
+        </div>
+
+        <div class="drop-zone" id="dropZone">
+          <div class="icon">📦</div>
+          <div style="font-weight:600; margin-bottom:6px">Tarik & lepas file ZIP di sini</div>
+          <div style="color:var(--muted); font-size:0.9rem">atau klik untuk memilih file</div>
+        </div>
+
+        <div class="tips">
+          <strong>Cara pakai:</strong>
+          <ul>
+            <li><strong>Paling mudah:</strong> Download ZIP dari Google Drive, lalu pilih file di sini.</li>
+            <li>Atau tempel link Google Drive (file harus “Anyone with the link”).</li>
+            <li>Klik tombol <strong>📝 Teks</strong> untuk membuka panel split (Google Docs / file TXT).</li>
+            <li>Urutan gambar mengikuti nama file (natural sort).</li>
+            <li>Format gambar: JPG, PNG, WEBP, GIF, AVIF, BMP, TIFF, HEIC, SVG, dll.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div id="reader"></div>
+    </div>
+
+    <div id="resizeHandle"></div>
+
+    <div id="textPane">
+      <div id="textPaneHeader">
+        <div class="row">
+          <input type="text" id="docsUrlInput" placeholder="Link Google Docs..." />
+          <button id="loadDocsBtn">Muat</button>
+        </div>
+        <div class="row">
+          <label class="file-label" for="txtFileInput" style="flex:1; text-align:center;">📄 Upload TXT</label>
+          <input type="file" id="txtFileInput" accept=".txt,text/plain" />
+          <button id="clearTextBtn" class="secondary">Hapus</button>
+        </div>
+      </div>
+      <div id="textContent"></div>
+    </div>
+  </div>
+
+  <div class="page-info" id="pageInfo" style="display:none"></div>
+
+  <div id="floatBar">
+    <button class="secondary" id="topBtn" title="Ke atas">↑</button>
+    <button class="secondary" id="closeReaderBtn" title="Tutup">✕</button>
+  </div>
+
+  <div id="loadingOverlay">
+    <div class="spinner"></div>
+    <div id="loadingText">Memuat...</div>
+  </div>
+
+  <script>
+    // ========== HELPERS ==========
+    const $ = (sel) => document.querySelector(sel);
+    const statusEl = $('#status');
+    const reader = $('#reader');
+    const landing = $('#landing');
+    const pageInfo = $('#pageInfo');
+    const progressBar = $('#progressBar');
+    const loadingOverlay = $('#loadingOverlay');
+    const loadingText = $('#loadingText');
+    const floatBar = $('#floatBar');
+    const textContent = $('#textContent');
+
+    function setStatus(msg, type = '') {
+      statusEl.textContent = msg;
+      statusEl.className = 'status ' + type;
+    }
+
+    function showLoading(text = 'Memuat...') {
+      loadingText.textContent = text;
+      loadingOverlay.classList.add('show');
+    }
+
+    function hideLoading() {
+      loadingOverlay.classList.remove('show');
+    }
+
+    function naturalSort(a, b) {
+      return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+    }
+
+    // Broad image detection — allow almost any common image extension
+    // Browser will handle what it can decode (AVIF, WebP, etc. depending on support)
+    function isImage(name) {
+      return /\.(jpe?g|png|gif|webp|avif|bmp|tiff?|heic|heif|svg|ico|jfif|pjpeg|pjp|apng)$/i.test(name);
+    }
+
+    // If no extension match, still try files that look like images by common comic naming
+    // (fallback: accept files without obvious non-image extensions)
+    function isLikelyImage(name) {
+      if (isImage(name)) return true;
+      // Skip known non-image files
+      if (/\.(txt|nfo|md|json|xml|html?|css|js|pdf|zip|rar|7z|exe|dll|ds_store|thumbs\.db)$/i.test(name)) return false;
+      // Accept files with no extension or unknown extension (some comics pack raw)
+      return true;
+    }
+
+    function extractDriveId(url) {
+      if (!url) return null;
+      let m = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+      if (m) return m[1];
+      m = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+      if (m) return m[1];
+      if (/^[a-zA-Z0-9_-]{20,}$/.test(url.trim())) return url.trim();
+      return null;
+    }
+
+    function extractDocsId(url) {
+      if (!url) return null;
+      // https://docs.google.com/document/d/DOC_ID/edit...
+      let m = url.match(/\/document\/d\/([a-zA-Z0-9_-]+)/);
+      if (m) return m[1];
+      // already export link
+      m = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+      if (m) return m[1];
+      if (/^[a-zA-Z0-9_-]{20,}$/.test(url.trim())) return url.trim();
+      return null;
+    }
+
+    function toDriveDownloadUrl(id) {
+      return `https://drive.google.com/uc?export=download&id=${id}`;
+    }
+
+    function toDocsExportTxtUrl(id) {
+      return `https://docs.google.com/document/d/${id}/export?format=txt`;
+    }
+
+    // ========== CORE: Load ZIP ==========
+    async function loadZipFromArrayBuffer(buffer, sourceName = 'file') {
+      showLoading('Membuka ZIP...');
+      setStatus('Membuka arsip...', 'loading');
+
+      try {
+        const zip = await JSZip.loadAsync(buffer);
+        const entries = [];
+
+        zip.forEach((relativePath, entry) => {
+          if (!entry.dir && isLikelyImage(relativePath)) {
+            entries.push(relativePath);
+          }
+        });
+
+        if (entries.length === 0) {
+          throw new Error('Tidak ada gambar ditemukan di dalam ZIP.');
+        }
+
+        entries.sort(naturalSort);
+
+        showLoading(`Menyiapkan ${entries.length} halaman...`);
+        setStatus(`Memproses ${entries.length} gambar...`, 'loading');
+
+        reader.innerHTML = '';
+        reader.classList.add('active');
+        landing.style.display = 'none';
+        $('#clearBtn').style.display = 'inline-flex';
+        floatBar.classList.add('show');
+        pageInfo.style.display = 'block';
+
+        const total = entries.length;
+        let loaded = 0;
+
+        for (const path of entries) {
+          const blob = await zip.file(path).async('blob');
+          // Let the browser sniff the type if possible
+          const url = URL.createObjectURL(blob);
+
+          const page = document.createElement('div');
+          page.className = 'page';
+          page.dataset.index = loaded;
+
+          const img = document.createElement('img');
+          img.src = url;
+          img.alt = path.split('/').pop();
+          img.loading = loaded < 4 ? 'eager' : 'lazy';
+          img.decoding = 'async';
+
+          // Graceful fallback if format not supported by browser
+          img.onerror = () => {
+            img.style.display = 'none';
+            const note = document.createElement('div');
+            note.style.cssText = 'padding:40px 20px;text-align:center;color:#666;font-size:0.9rem;';
+            note.textContent = `Format tidak didukung browser: ${path.split('/').pop()}`;
+            page.appendChild(note);
+          };
+
+          page.appendChild(img);
+          reader.appendChild(page);
+
+          loaded++;
+          const pct = Math.round((loaded / total) * 100);
+          progressBar.style.width = pct + '%';
+          loadingText.textContent = `Memuat halaman ${loaded} / ${total}`;
+        }
+
+        hideLoading();
+        progressBar.style.width = '0%';
+        setStatus(`${total} halaman • ${sourceName}`, 'success');
+        updatePageInfo();
+        $('#comicPane').scrollTo(0, 0);
+
+      } catch (err) {
+        hideLoading();
+        console.error(err);
+        setStatus('Gagal: ' + err.message, 'error');
+        alert('Gagal membuka ZIP:\n' + err.message);
+      }
+    }
+
+    async function handleFile(file) {
+      if (!file) return;
+      showLoading('Membaca file...');
+      const buffer = await file.arrayBuffer();
+      await loadZipFromArrayBuffer(buffer, file.name);
+    }
+
+    async function loadFromUrl(rawUrl) {
+      let url = rawUrl.trim();
+      if (!url) return;
+
+      const driveId = extractDriveId(url);
+      if (driveId) {
+        url = toDriveDownloadUrl(driveId);
+        setStatus('Mencoba unduh dari Google Drive...', 'loading');
+      } else {
+        setStatus('Mengunduh ZIP...', 'loading');
+      }
+
+      showLoading('Mengunduh file... (bisa lama jika besar)');
+
+      try {
+        let res = await fetch(url, { redirect: 'follow', mode: 'cors' });
+
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('text/html')) {
+          const html = await res.text();
+          const confirmMatch = html.match(/confirm=([0-9A-Za-z_]+)/) ||
+                               html.match(/name="confirm"\s+value="([^"]+)"/);
+          if (confirmMatch && driveId) {
+            const confirm = confirmMatch[1];
+            const confirmedUrl = `https://drive.google.com/uc?export=download&confirm=${confirm}&id=${driveId}`;
+            showLoading('Mengonfirmasi unduhan Google Drive...');
+            res = await fetch(confirmedUrl, { redirect: 'follow', mode: 'cors' });
+          } else {
+            throw new Error(
+              'Google Drive menampilkan halaman konfirmasi / memblokir akses langsung.\n\n' +
+              'Solusi: Download file ZIP secara manual, lalu buka dengan tombol "ZIP".'
+            );
+          }
+        }
+
+        if (!res.ok) throw new Error(`HTTP ${res.status} – ${res.statusText}`);
+
+        const buffer = await res.arrayBuffer();
+        const header = new Uint8Array(buffer.slice(0, 2));
+        if (header[0] !== 0x50 || header[1] !== 0x4B) {
+          throw new Error(
+            'File yang diunduh bukan ZIP yang valid.\n\nSolusi: Download manual lalu pilih file lokal.'
+          );
+        }
+
+        await loadZipFromArrayBuffer(buffer, driveId ? 'Google Drive' : url);
+
+      } catch (err) {
+        hideLoading();
+        console.error(err);
+        let msg = err.message || String(err);
+        if (msg.includes('Failed to fetch') || msg.includes('CORS') || msg.includes('NetworkError')) {
+          msg = 'Gagal mengambil file (kemungkinan diblokir CORS oleh Google Drive).\n\n' +
+                'Solusi terbaik: Download ZIP-nya dulu, lalu buka dengan tombol "ZIP".';
+        }
+        setStatus('Gagal memuat link', 'error');
+        alert(msg);
+      }
+    }
+
+    // ========== TEXT PANEL (Google Docs / TXT) ==========
+    async function loadDocsFromUrl(rawUrl) {
+      const url = rawUrl.trim();
+      if (!url) return;
+
+      const docsId = extractDocsId(url);
+      if (!docsId) {
+        alert('Link Google Docs tidak valid.\nContoh: https://docs.google.com/document/d/XXXX/edit');
+        return;
+      }
+
+      const exportUrl = toDocsExportTxtUrl(docsId);
+      showLoading('Mengambil teks dari Google Docs...');
+      setStatus('Memuat Google Docs...', 'loading');
+
+      try {
+        const res = await fetch(exportUrl, { redirect: 'follow', mode: 'cors' });
+        if (!res.ok) {
+          throw new Error(
+            `HTTP ${res.status}. Pastikan dokumen di-set “Anyone with the link” (Viewer).`
+          );
+        }
+        const text = await res.text();
+        textContent.textContent = text;
+        setStatus('Teks Google Docs berhasil dimuat', 'success');
+        // Auto enable split if not yet
+        if (!document.body.classList.contains('split-mode')) {
+          toggleSplit(true);
+        }
+      } catch (err) {
+        console.error(err);
+        let msg = err.message || String(err);
+        if (msg.includes('Failed to fetch') || msg.includes('CORS')) {
+          msg = 'Gagal mengambil Google Docs (CORS / akses).\n\n' +
+                'Pastikan dokumen public (“Anyone with the link”),\n' +
+                'atau download sebagai .txt lalu upload di sini.';
+        }
+        setStatus('Gagal memuat Docs', 'error');
+        alert(msg);
+      } finally {
+        hideLoading();
+      }
+    }
+
+    function handleTxtFile(file) {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        textContent.textContent = reader.result;
+        setStatus('File TXT berhasil dimuat', 'success');
+        if (!document.body.classList.contains('split-mode')) {
+          toggleSplit(true);
+        }
+      };
+      reader.onerror = () => {
+        setStatus('Gagal membaca TXT', 'error');
+        alert('Gagal membaca file TXT.');
+      };
+      reader.readAsText(file, 'UTF-8');
+    }
+
+    function clearText() {
+      textContent.textContent = '';
+      $('#docsUrlInput').value = '';
+      setStatus('');
+    }
+
+    function toggleSplit(force) {
+      const isOn = force !== undefined ? force : !document.body.classList.contains('split-mode');
+      document.body.classList.toggle('split-mode', isOn);
+      $('#splitBtn').classList.toggle('active-toggle', isOn);
+      $('#splitBtn').textContent = isOn ? '📝 Teks ✓' : '📝 Teks';
+    }
+
+    // ========== Page info ==========
+    function updatePageInfo() {
+      const pages = reader.querySelectorAll('.page');
+      if (!pages.length) {
+        pageInfo.style.display = 'none';
+        return;
+      }
+
+      const pane = $('#comicPane');
+      const scrollY = pane.scrollTop + pane.clientHeight / 3;
+      let current = 0;
+      pages.forEach((p, i) => {
+        if (p.offsetTop <= scrollY) current = i;
+      });
+      pageInfo.textContent = `${current + 1} / ${pages.length}`;
+    }
+
+    // ========== Resize handle ==========
+    (function initResize() {
+      const handle = $('#resizeHandle');
+      const textPane = $('#textPane');
+      let startX, startWidth;
+
+      handle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        startX = e.clientX;
+        startWidth = textPane.getBoundingClientRect().width;
+        handle.classList.add('active');
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+
+        function onMove(ev) {
+          const delta = startX - ev.clientX;
+          let newW = Math.min(Math.max(startWidth + delta, 260), window.innerWidth * 0.55);
+          textPane.style.width = newW + 'px';
+          document.documentElement.style.setProperty('--panel-width', newW + 'px');
+        }
+
+        function onUp() {
+          handle.classList.remove('active');
+          document.body.style.cursor = '';
+          document.body.style.userSelect = '';
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+        }
+
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    })();
+
+    // ========== Events ==========
+    $('#fileInput').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) handleFile(file);
+      e.target.value = '';
+    });
+
+    $('#loadUrlBtn').addEventListener('click', () => loadFromUrl($('#urlInput').value));
+    $('#urlInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') loadFromUrl($('#urlInput').value);
+    });
+
+    $('#splitBtn').addEventListener('click', () => toggleSplit());
+
+    $('#loadDocsBtn').addEventListener('click', () => loadDocsFromUrl($('#docsUrlInput').value));
+    $('#docsUrlInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') loadDocsFromUrl($('#docsUrlInput').value);
+    });
+
+    $('#txtFileInput').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) handleTxtFile(file);
+      e.target.value = '';
+    });
+
+    $('#clearTextBtn').addEventListener('click', clearText);
+
+    function closeReader() {
+      reader.querySelectorAll('img').forEach(img => {
+        if (img.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
+      });
+      reader.innerHTML = '';
+      reader.classList.remove('active');
+      landing.style.display = 'flex';
+      $('#clearBtn').style.display = 'none';
+      floatBar.classList.remove('show');
+      pageInfo.style.display = 'none';
+      progressBar.style.width = '0%';
+      setStatus('');
+      $('#comicPane').scrollTo(0, 0);
+    }
+
+    $('#clearBtn').addEventListener('click', closeReader);
+    $('#closeReaderBtn').addEventListener('click', closeReader);
+    $('#topBtn').addEventListener('click', () => {
+      $('#comicPane').scrollTo({ top: 0, behavior: 'smooth' });
+    });
+
+    // Drop zone
+    const dropZone = $('#dropZone');
+    dropZone.addEventListener('click', () => $('#fileInput').click());
+
+    ['dragenter', 'dragover'].forEach(evt => {
+      dropZone.addEventListener(evt, (e) => {
+        e.preventDefault();
+        dropZone.classList.add('dragover');
+      });
+    });
+    ['dragleave', 'drop'].forEach(evt => {
+      dropZone.addEventListener(evt, (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+      });
+    });
+    dropZone.addEventListener('drop', (e) => {
+      const file = e.dataTransfer.files[0];
+      if (file) handleFile(file);
+    });
+
+    document.body.addEventListener('dragover', (e) => e.preventDefault());
+    document.body.addEventListener('drop', (e) => {
+      e.preventDefault();
+      if (e.dataTransfer.files.length) {
+        const f = e.dataTransfer.files[0];
+        if (/\.txt$/i.test(f.name) || f.type === 'text/plain') {
+          handleTxtFile(f);
+        } else {
+          handleFile(f);
+        }
+      }
+    });
+
+    $('#comicPane').addEventListener('scroll', () => {
+      requestAnimationFrame(updatePageInfo);
+    }, { passive: true });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && reader.classList.contains('active')) {
+        closeReader();
+      }
+    });
+  </script>
+</body>
+</html>
