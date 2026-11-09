@@ -538,20 +538,84 @@
       return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
     }
 
-    // Broad image detection — allow almost any common image extension
-    // Browser will handle what it can decode (AVIF, WebP, etc. depending on support)
+    // Strict image extensions only (avoid picking up junk / non-images)
     function isImage(name) {
-      return /\.(jpe?g|png|gif|webp|avif|bmp|tiff?|heic|heif|svg|ico|jfif|pjpeg|pjp|apng)$/i.test(name);
+      const base = name.split('/').pop(); // filename only
+      return /\.(jpe?g|png|gif|webp|avif|bmp|tiff?|heic|heif|svg|ico|jfif|pjpeg|pjp|apng)$/i.test(base);
     }
 
-    // If no extension match, still try files that look like images by common comic naming
-    // (fallback: accept files without obvious non-image extensions)
-    function isLikelyImage(name) {
-      if (isImage(name)) return true;
-      // Skip known non-image files
-      if (/\.(txt|nfo|md|json|xml|html?|css|js|pdf|zip|rar|7z|exe|dll|ds_store|thumbs\.db)$/i.test(name)) return false;
-      // Accept files with no extension or unknown extension (some comics pack raw)
-      return true;
+    // Skip macOS metadata, Windows thumbs, hidden files, etc.
+    function isJunkPath(path) {
+      const lower = path.toLowerCase();
+      if (lower.includes('__macosx')) return true;
+      if (lower.includes('.ds_store')) return true;
+      if (lower.includes('thumbs.db')) return true;
+      if (lower.includes('desktop.ini')) return true;
+      if (/(^|\/)\._/.test(path)) return true; // AppleDouble
+      if (/(^|\/)\./.test(path.split('/').pop())) return true; // hidden file
+      return false;
+    }
+
+    // Collect image entries smartly:
+    // 1. Only real image extensions
+    // 2. Skip junk paths
+    // 3. If all images live under one common folder, prefer that folder
+    // 4. Deduplicate by filename (keep first occurrence after sort)
+    function collectImageEntries(zip) {
+      const all = [];
+      zip.forEach((relativePath, entry) => {
+        if (entry.dir) return;
+        if (isJunkPath(relativePath)) return;
+        if (!isImage(relativePath)) return;
+        all.push(relativePath);
+      });
+
+      if (all.length === 0) return [];
+
+      // Prefer images that share the shallowest common directory
+      // (helps when ZIP has one main folder + random extra files)
+      const dirs = all.map(p => {
+        const parts = p.split('/');
+        parts.pop();
+        return parts.join('/');
+      });
+      const dirCount = {};
+      dirs.forEach(d => { dirCount[d] = (dirCount[d] || 0) + 1; });
+
+      // Find directory that holds the majority of images
+      let bestDir = null;
+      let bestCount = 0;
+      for (const [d, c] of Object.entries(dirCount)) {
+        if (c > bestCount) {
+          bestCount = c;
+          bestDir = d;
+        }
+      }
+
+      let filtered = all;
+      // Only filter by folder if clear majority (>60%) and there is a folder
+      if (bestDir !== null && bestCount / all.length >= 0.6) {
+        filtered = all.filter(p => {
+          const parts = p.split('/');
+          parts.pop();
+          return parts.join('/') === bestDir;
+        });
+      }
+
+      // Sort by full path with natural order
+      filtered.sort(naturalSort);
+
+      // Deduplicate by basename (keep first after sort)
+      const seen = new Set();
+      const unique = [];
+      for (const path of filtered) {
+        const base = path.split('/').pop().toLowerCase();
+        if (seen.has(base)) continue;
+        seen.add(base);
+        unique.push(path);
+      }
+
+      return unique;
     }
 
     function extractDriveId(url) {
@@ -566,10 +630,8 @@
 
     function extractDocsId(url) {
       if (!url) return null;
-      // https://docs.google.com/document/d/DOC_ID/edit...
       let m = url.match(/\/document\/d\/([a-zA-Z0-9_-]+)/);
       if (m) return m[1];
-      // already export link
       m = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
       if (m) return m[1];
       if (/^[a-zA-Z0-9_-]{20,}$/.test(url.trim())) return url.trim();
@@ -591,22 +653,19 @@
 
       try {
         const zip = await JSZip.loadAsync(buffer);
-        const entries = [];
-
-        zip.forEach((relativePath, entry) => {
-          if (!entry.dir && isLikelyImage(relativePath)) {
-            entries.push(relativePath);
-          }
-        });
+        const entries = collectImageEntries(zip);
 
         if (entries.length === 0) {
           throw new Error('Tidak ada gambar ditemukan di dalam ZIP.');
         }
 
-        entries.sort(naturalSort);
-
         showLoading(`Menyiapkan ${entries.length} halaman...`);
         setStatus(`Memproses ${entries.length} gambar...`, 'loading');
+
+        // Revoke old blob URLs if any
+        reader.querySelectorAll('img').forEach(img => {
+          if (img.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
+        });
 
         reader.innerHTML = '';
         reader.classList.add('active');
@@ -618,38 +677,55 @@
         const total = entries.length;
         let loaded = 0;
 
-        for (const path of entries) {
-          const blob = await zip.file(path).async('blob');
-          // Let the browser sniff the type if possible
-          const url = URL.createObjectURL(blob);
-
+        // Create placeholder pages first (keeps order), then fill blobs in parallel
+        const pageEls = entries.map((path, i) => {
           const page = document.createElement('div');
           page.className = 'page';
-          page.dataset.index = loaded;
+          page.dataset.index = i;
+          page.dataset.path = path;
 
           const img = document.createElement('img');
-          img.src = url;
           img.alt = path.split('/').pop();
-          img.loading = loaded < 4 ? 'eager' : 'lazy';
+          img.loading = i < 6 ? 'eager' : 'lazy';
           img.decoding = 'async';
+          img.style.minHeight = '40px';
 
-          // Graceful fallback if format not supported by browser
           img.onerror = () => {
             img.style.display = 'none';
             const note = document.createElement('div');
             note.style.cssText = 'padding:40px 20px;text-align:center;color:#666;font-size:0.9rem;';
-            note.textContent = `Format tidak didukung browser: ${path.split('/').pop()}`;
+            note.textContent = `Format tidak didukung: ${path.split('/').pop()}`;
             page.appendChild(note);
           };
 
           page.appendChild(img);
           reader.appendChild(page);
+          return { page, img, path };
+        });
 
-          loaded++;
-          const pct = Math.round((loaded / total) * 100);
-          progressBar.style.width = pct + '%';
-          loadingText.textContent = `Memuat halaman ${loaded} / ${total}`;
+        // Load blobs with limited concurrency (faster, still ordered display)
+        const CONCURRENCY = 6;
+        let idx = 0;
+
+        async function worker() {
+          while (idx < pageEls.length) {
+            const current = idx++;
+            const { img, path } = pageEls[current];
+            try {
+              const blob = await zip.file(path).async('blob');
+              img.src = URL.createObjectURL(blob);
+            } catch (e) {
+              console.warn('Gagal ekstrak:', path, e);
+            }
+            loaded++;
+            const pct = Math.round((loaded / total) * 100);
+            progressBar.style.width = pct + '%';
+            loadingText.textContent = `Memuat ${loaded} / ${total}`;
+          }
         }
+
+        const workers = Array.from({ length: Math.min(CONCURRENCY, total) }, () => worker());
+        await Promise.all(workers);
 
         hideLoading();
         progressBar.style.width = '0%';
